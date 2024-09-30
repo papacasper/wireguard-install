@@ -142,21 +142,24 @@ new_client_dns () {
 }
 
 new_client_setup () {
-	# Given a list of the assigned internal IPv4 addresses, obtain the lowest still
-	# available octet. Important to start looking at 2, because 1 is our gateway.
-	octet=2
-	while grep AllowedIPs /etc/wireguard/wg0.conf | cut -d "." -f 4 | cut -d "/" -f 1 | grep -q "^$octet$"; do
-		(( octet++ ))
-	done
-	# Don't break the WireGuard configuration in case the address space is full
-	if [[ "$octet" -eq 255 ]]; then
-		echo "253 clients are already configured. The WireGuard internal subnet is full!"
-		exit
-	fi
-	key=$(wg genkey)
-	psk=$(wg genpsk)
-	# Configure client in the server
-	cat << EOF >> /etc/wireguard/wg0.conf
+    # Given a list of the assigned internal IPv4 addresses, obtain the lowest still
+    # available octet. Important to start looking at 2, because 1 is our gateway.
+    octet=2
+    while grep AllowedIPs /etc/wireguard/wg0.conf | cut -d "." -f 4 | cut -d "/" -f 1 | grep -q "^$octet$"; do
+        (( octet++ ))
+    done
+    # Don't break the WireGuard configuration in case the address space is full
+    if [[ "$octet" -eq 255 ]]; then
+        echo "253 clients are already configured. The WireGuard internal subnet is full!"
+        exit
+    fi
+
+    # Generate client keys
+    key=$(wg genkey)
+    psk=$(wg genpsk)
+
+    # Configure client in the server
+    cat << EOF >> /etc/wireguard/wg0.conf
 # BEGIN_PEER $client
 [Peer]
 PublicKey = $(wg pubkey <<< $key)
@@ -164,8 +167,21 @@ PresharedKey = $psk
 AllowedIPs = 10.7.0.$octet/32$(grep -q 'fddd:2c4:2c4:2c4::1' /etc/wireguard/wg0.conf && echo ", fddd:2c4:2c4:2c4::$octet/128")
 # END_PEER $client
 EOF
-	# Create client configuration
-	cat << EOF > ~/"$client".conf
+
+    # Create the configuration directory if it doesn't exist
+    CONFIG_DIR="$HOME/.wg-configs"
+    if [ ! -d "$CONFIG_DIR" ]; then
+        mkdir -p "$CONFIG_DIR"
+        if [ $? -ne 0 ]; then
+            echo "Error: Failed to create configuration directory $CONFIG_DIR." >&2
+            exit 1
+        fi
+        echo "Directory $CONFIG_DIR created successfully."
+    fi
+
+    # Create client configuration file in the custom directory
+    CONFIG_FILE="$CONFIG_DIR/$client.conf"
+    cat << EOF > "$CONFIG_FILE"
 [Interface]
 Address = 10.7.0.$octet/24$(grep -q 'fddd:2c4:2c4:2c4::1' /etc/wireguard/wg0.conf && echo ", fddd:2c4:2c4:2c4::$octet/64")
 DNS = $dns
@@ -178,6 +194,14 @@ AllowedIPs = 0.0.0.0/0, ::/0
 Endpoint = $(grep '^# ENDPOINT' /etc/wireguard/wg0.conf | cut -d " " -f 3):$(grep ListenPort /etc/wireguard/wg0.conf | cut -d " " -f 3)
 PersistentKeepalive = 25
 EOF
+
+    # Verify if the configuration file was created successfully
+    if [ $? -eq 0 ]; then
+        echo "Configuration file $CONFIG_FILE created successfully."
+    else
+        echo "Error: Failed to create configuration file $CONFIG_FILE." >&2
+        exit 1
+    fi
 }
 
 if [[ ! -e /etc/wireguard/wg0.conf ]]; then
